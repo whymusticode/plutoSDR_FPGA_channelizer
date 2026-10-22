@@ -1,3 +1,55 @@
+# plutoSDR_FPGA_channelizer
+
+This is a fork of Analog Devices' [plutosdr-fw](https://github.com/analogdevicesinc/plutosdr-fw)
+at **v0.39** whose bitstream splits both coherent ADALM-Pluto receivers into a
+polyphase filter bank in the FPGA and streams only the channels you select.
+The channel count (2..256), spacing, usable bandwidth and filter length are
+set from the host at runtime. Everything specific to this fork is in
+[`channelizer/`](channelizer/README.md) and `patches/`; the submodules stay at
+their stock v0.39 commits.
+
+> Status: pre-release. Bit-exact against its model in simulation at every
+> size; hardware validation of this image is in progress.
+
+## Build
+
+Needs Vivado 2023.2 and the host packages listed in ADI's instructions below.
+
+```sh
+git clone --recurse-submodules -b channelizer https://github.com/whymusticode/plutoSDR_FPGA_channelizer.git
+cd plutoSDR_FPGA_channelizer
+make VIVADO_SETTINGS=/opt/Xilinx/Vivado/2023.2/settings64.sh build/pluto.frm build/pluto.dfu
+```
+
+On first use the Makefile applies `patches/hdl` (two hooks that let
+`channelizer/hdl/bd.tcl` edit the stock Pluto block design) and
+`patches/buildroot` (mirror and compiler fixes so the 2019-era host packages
+build on a current distribution). Flash `build/pluto.frm` the usual way: copy
+it to the Pluto's mass-storage drive and eject.
+
+## Use
+
+```python
+from pluto_channelizer import PlutoChannelizer      # channelizer/host/
+
+with PlutoChannelizer(nch=6, spacing=400e3, bandwidth=300e3, lo=100e6) as pfb:
+    pfb.select([0, 2, 5])
+    x = pfb.read(400_000)                    # {channel: (2, n) complex64}, RX1/RX2
+```
+
+See [`channelizer/README.md`](channelizer/README.md) for the channel model,
+limits and register map.
+
+## License
+
+`channelizer/` and `patches/` are MIT licensed ([`channelizer/LICENSE`](channelizer/LICENSE)).
+The rest of the firmware is ADI's and its components keep their own licenses;
+see `LICENSE.md` below.
+
+---
+
+*The original README follows.*
+
 # plutosdr-fw
 PlutoSDR Firmware for the [ADALM-PLUTO](https://wiki.analog.com/university/tools/pluto "PlutoSDR Wiki Page") Active Learning Module
 

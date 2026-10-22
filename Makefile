@@ -30,6 +30,19 @@ endif
 TARGET ?= pluto
 SUPPORTED_TARGETS:=pluto sidekiqz2
 
+### Channelizer ###
+# The bitstream is the stock Pluto design with channelizer/ edited into it
+# through two hooks in hdl/projects/pluto (patches/hdl); patches/buildroot lets
+# the 2019-era host packages build on a current distribution. The submodules
+# stay at their stock v0.39 commits; the patches are applied once, on first use.
+export PLUTO_PROJECT_DIR ?= $(CURDIR)/channelizer
+export PLUTO_FW_SCRIPTS ?= $(CURDIR)/channelizer/scripts
+export CMAKE_POLICY_VERSION_MINIMUM ?= 3.5
+
+%/.channelizer-patched:
+	git -C $* apply $(sort $(wildcard $(CURDIR)/patches/$*/*.patch))
+	touch $@
+
 # Include target specific constants
 include scripts/$(TARGET).mk
 
@@ -58,7 +71,7 @@ endif
 
 TARGET_DTS_FILES:=$(foreach dts,$(TARGET_DTS_FILES),build/$(dts))
 
-TOOLCHAIN:
+TOOLCHAIN: | buildroot/.channelizer-patched
 	make -C buildroot ARCH=arm zynq_$(TARGET)_defconfig
 	make -C buildroot toolchain
 
@@ -109,7 +122,7 @@ build/%.dtb: linux/arch/arm/boot/dts/%.dtb | build
 
 ### Buildroot ###
 
-buildroot/output/images/rootfs.cpio.gz:
+buildroot/output/images/rootfs.cpio.gz: | buildroot/.channelizer-patched
 	@echo device-fw $(VERSION)> $(CURDIR)/buildroot/board/$(TARGET)/VERSIONS
 	@$(foreach dir,$(VSUBDIRS),echo $(dir) $(shell cd $(dir) && git describe --abbrev=4 --dirty --always --tags) >> $(CURDIR)/buildroot/board/$(TARGET)/VERSIONS;)
 	make -C buildroot ARCH=arm zynq_$(TARGET)_defconfig
@@ -130,9 +143,9 @@ build/rootfs.cpio.gz: buildroot/output/images/rootfs.cpio.gz | build
 build/$(TARGET).itb: u-boot-xlnx/tools/mkimage build/zImage build/rootfs.cpio.gz $(TARGET_DTS_FILES) build/system_top.bit
 	u-boot-xlnx/tools/mkimage -f scripts/$(TARGET).its $@
 
-build/system_top.xsa:  | build
+build/system_top.xsa:  | build hdl/.channelizer-patched
 ifeq (1, ${HAVE_VIVADO})
-	bash -c "source $(VIVADO_SETTINGS) && make -C hdl/projects/$(TARGET) && cp hdl/projects/$(TARGET)/$(TARGET).sdk/system_top.xsa $@"
+	bash -c "source $(VIVADO_SETTINGS) && env -u MAKEFLAGS -u MAKEOVERRIDES make -C hdl/projects/$(TARGET) && cp hdl/projects/$(TARGET)/$(TARGET).sdk/system_top.xsa $@"
 	unzip -l $@ | grep -q ps7_init || cp hdl/projects/$(TARGET)/$(TARGET).srcs/sources_1/bd/system/ip/system_sys_ps7_0/ps7_init* build/
 else ifneq ($(XSA_FILE),)
 	cp $(XSA_FILE) $@
@@ -142,12 +155,16 @@ endif
 
 ### TODO: Build system_top.xsa from src if dl fails ...
 
-build/sdk/fsbl/Release/fsbl.elf build/system_top.bit : build/system_top.xsa
+build/system_top.bit: build/system_top.xsa
+	unzip -o $< system_top.bit -d build
+
+build/sdk/fsbl/Release/fsbl.elf: build/system_top.xsa
 	rm -Rf build/sdk
 ifeq (1, ${HAVE_VIVADO})
 	bash -c "source $(VIVADO_SETTINGS) && xsct scripts/create_fsbl_project.tcl"
 else
-	unzip -o build/system_top.xsa system_top.bit -d build
+	@echo "XSCT is required to build the FSBL" >&2
+	@false
 endif
 
 build/boot.bin: build/sdk/fsbl/Release/fsbl.elf build/u-boot.elf

@@ -1,0 +1,66 @@
+diff --git a/Config.in b/Config.in
+index 670e199c..062f314f 100644
+--- a/Config.in
++++ b/Config.in
+@@ -264,7 +264,7 @@ config BR2_KERNEL_MIRROR
+ 
+ config BR2_GNU_MIRROR
+ 	string "GNU Software mirror"
+-	default "http://ftpmirror.gnu.org"
++	default "https://sources.buildroot.net"
+ 	help
+ 	  GNU has multiple software mirrors scattered around the
+ 	  world. The following allows you to select your preferred
+diff --git a/configs/zynq_pluto_defconfig b/configs/zynq_pluto_defconfig
+index 6203766e..ab565141 100644
+--- a/configs/zynq_pluto_defconfig
++++ b/configs/zynq_pluto_defconfig
+@@ -62,3 +62,5 @@ BR2_TARGET_ROOTFS_CPIO_UIMAGE=y
+ BR2_PACKAGE_HOST_DOSFSTOOLS=y
+ BR2_PACKAGE_HOST_GENIMAGE=y
+ BR2_PACKAGE_HOST_MTOOLS=y
++BR2_PRIMARY_SITE="https://sources.buildroot.net"
++BR2_BACKUP_SITE="https://sources.buildroot.net"
+diff --git a/package/lzip/lzip.mk b/package/lzip/lzip.mk
+index 31b57507..c135c576 100644
+--- a/package/lzip/lzip.mk
++++ b/package/lzip/lzip.mk
+@@ -5,7 +5,7 @@
+ ################################################################################
+ 
+ LZIP_VERSION = 1.23
+-LZIP_SITE = http://download.savannah.gnu.org/releases/lzip
++LZIP_SITE = https://sources.buildroot.net/lzip
+ LZIP_LICENSE = GPL-2.0+
+ LZIP_LICENSE_FILES = COPYING
+ 
+diff --git a/package/m4/0001-gnulib-prefer-gnu-nodiscard-attribute.patch b/package/m4/0001-gnulib-prefer-gnu-nodiscard-attribute.patch
+new file mode 100644
+index 00000000..607d8364
+--- /dev/null
++++ b/package/m4/0001-gnulib-prefer-gnu-nodiscard-attribute.patch
+@@ -0,0 +1,24 @@
++From: Pluto channelizer build <noreply@localhost>
++Subject: [PATCH] gnulib: prefer GNU nodiscard spelling with modern GCC
++
++GCC defines __STDC_VERSION__ as C23 while compiling in gnu11 mode, but the
++C23 [[nodiscard]] spelling cannot appear between the inline storage specifier
++and return type used by this older gnulib snapshot. Prefer GCC's established
++warn_unused_result spelling, which is valid in those declarations.
++
++--- a/lib/config.hin
+++++ b/lib/config.hin
++@@ -2585,9 +2585,9 @@
++ # define _GL_ATTRIBUTE_MALLOC
++ #endif
++ 
++-#if 201710L < __STDC_VERSION__
++-# define _GL_ATTRIBUTE_NODISCARD [[__nodiscard__]]
++-#elif _GL_HAS_ATTRIBUTE (warn_unused_result)
+++#if _GL_HAS_ATTRIBUTE (warn_unused_result)
++ # define _GL_ATTRIBUTE_NODISCARD __attribute__ ((__warn_unused_result__))
+++#elif 201710L < __STDC_VERSION__
+++# define _GL_ATTRIBUTE_NODISCARD [[__nodiscard__]]
++ #else
++ # define _GL_ATTRIBUTE_NODISCARD
++ #endif

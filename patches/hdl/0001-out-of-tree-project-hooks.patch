@@ -1,0 +1,42 @@
+diff --git a/projects/pluto/Makefile b/projects/pluto/Makefile
+index a8e40da..6d7bca4 100644
+--- a/projects/pluto/Makefile
++++ b/projects/pluto/Makefile
+@@ -21,4 +21,9 @@ LIB_DEPS += axi_tdd
+ LIB_DEPS += util_pack/util_cpack2
+ LIB_DEPS += util_pack/util_upack2
+ 
++# Out-of-tree project hook (scripts/pluto-fw): rebuild when its HDL changes.
++ifneq ($(PLUTO_PROJECT_DIR),)
++M_DEPS += $(wildcard $(PLUTO_PROJECT_DIR)/hdl/* $(PLUTO_PROJECT_DIR)/rtl/*)
++endif
++
+ include ../scripts/project-xilinx.mk
+diff --git a/projects/pluto/system_bd.tcl b/projects/pluto/system_bd.tcl
+index 0133b3f..264a233 100644
+--- a/projects/pluto/system_bd.tcl
++++ b/projects/pluto/system_bd.tcl
+@@ -381,3 +381,8 @@ ad_cpu_interrupt ps-13 mb-13 axi_ad9361_adc_dma/irq
+ ad_cpu_interrupt ps-12 mb-12 axi_ad9361_dac_dma/irq
+ ad_cpu_interrupt ps-11 mb-11 axi_spi/ip2intc_irpt
+ 
++# Out-of-tree project hook (scripts/pluto-fw): the project edits the stock design
++# here. Stock PL peripherals stay, because the stock device trees probe them.
++if {[info exists ::env(PLUTO_PROJECT_DIR)]} {
++  source $::env(PLUTO_PROJECT_DIR)/hdl/bd.tcl
++}
+diff --git a/projects/pluto/system_project.tcl b/projects/pluto/system_project.tcl
+index 3c5d49a..271c9c5 100644
+--- a/projects/pluto/system_project.tcl
++++ b/projects/pluto/system_project.tcl
+@@ -15,6 +15,10 @@ adi_project_files pluto [list \
+   "$ad_hdl_dir/library/common/ad_iobuf.v"]
+ 
+ set_property is_enabled false [get_files  *system_sys_ps7_0.xdc]
++# Out-of-tree project hook (scripts/pluto-fw): extra sources, constraints, strategy.
++if {[info exists ::env(PLUTO_PROJECT_DIR)]} {
++  source $::env(PLUTO_PROJECT_DIR)/hdl/project.tcl
++}
+ adi_project_run pluto
+ source $ad_hdl_dir/library/axi_ad9361/axi_ad9361_delay.tcl
+ 
