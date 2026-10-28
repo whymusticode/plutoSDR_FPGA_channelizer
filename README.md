@@ -1,19 +1,59 @@
 # plutoSDR_FPGA_channelizer
 
-This is a fork of Analog Devices' [plutosdr-fw](https://github.com/analogdevicesinc/plutosdr-fw)
-at **v0.39** whose bitstream splits both coherent ADALM-Pluto receivers into a
-polyphase filter bank in the FPGA and streams only the channels you select.
-The channel count (2..256), spacing, usable bandwidth and filter length are
-set from the host at runtime. Everything specific to this fork is in
-[`channelizer/`](channelizer/README.md) and `patches/`; the submodules stay at
-their stock v0.39 commits.
+**Listen to many narrow channels spread across the ADALM-Pluto's whole band at
+once, without the USB bottleneck.**
 
-> Status: pre-release. Bit-exact against its model in simulation at every
-> size and validated on hardware at n = 2, 4, 8, 64 and 256 (FM, BLE, LTE).
+The stock Pluto streams raw IQ over USB 2.0, which tops out at a few MS/s, far
+below the 20+ MHz the radio can see. This firmware puts a polyphase filter
+bank in the Pluto's FPGA: it splits the band (on both coherent receivers)
+into 2..256 equal channels and sends only the ones you pick. Need two
+Bluetooth channels 14 MHz apart, twelve FM stations or two LTE carriers?
+Select them and only those reach the host. Channel count, spacing, bandwidth,
+filter length and selection are all set from Python at runtime: one firmware
+image, no FPGA rebuilds.
+
+```python
+from pluto_channelizer import PlutoChannelizer      # channelizer/host/
+
+with PlutoChannelizer(nch=6, spacing=400e3, bandwidth=300e3, lo=100e6) as pfb:
+    pfb.select([0, 2, 5])                    # or pfb.select(freqs=[99.2e6, 100.4e6])
+    x = pfb.read(400_000)                    # {channel: (2, n) complex64}, RX1/RX2
+```
+
+And when even the selected channels are too much for USB, run a program on
+the Pluto's ARM cores that turns them into something smaller (audio,
+packets, fewer bits) before they leave the board. Copy a C binary or a Python
+script over ssh and call `run_app()`; still nothing to flash.
+
+## What it has done on real hardware
+
+| | channels | to the host |
+|---|---|---|
+| FM broadcast | 12 stations at once, demodulated on the Pluto | 1.2 MB/s of audio instead of 19 MB/s of IQ |
+| Bluetooth LE | 2402 MHz (advertising) + 2416 MHz together | 8-bit IQ, 8 MB/s continuous; or decoded packets at under 1 kB/s |
+| LTE | 751 MHz (Band 13) + 763 MHz (Band 14), PSS/SSS → cell IDs | two 1.5 MHz channels out of a 24 MS/s band |
+
+## What's in the fork
+
+- **FPGA:** a dual-RX critically sampled PFB (FFT size 2..256, up to 8 taps per
+  phase, runtime-loadable taps) and a channel selector, edited into the stock
+  Pluto block design. Bit-exact against its Python model in simulation.
+- **Host:** `PlutoChannelizer` designs the filter from `nch`, `spacing`,
+  `bandwidth` and `taps`, loads it, picks channels and streams them.
+- **On-board apps:** `channelizer/apps/`: bit-depth reduction (NEON), FM audio
+  and BLE advertising decode in C, and a small Python API (`pfbapp.py`) for your own.
+- **Firmware:** Python 3, numpy and libiio Python bindings on the board, and
+  Linux on both Cortex-A9 cores (stock firmware runs one).
+
+Details, limits and the register map: [`channelizer/README.md`](channelizer/README.md);
+apps: [`channelizer/apps/README.md`](channelizer/apps/README.md).
+
+> Status: pre-release. Validated on hardware at n = 2, 4, 8, 64 and 256.
 
 ## Build
 
-Needs Vivado 2023.2 and the host packages listed in ADI's instructions below.
+Building needs Vivado 2023.2 and the host packages listed in ADI's
+instructions below.
 
 ```sh
 git clone --recurse-submodules -b channelizer https://github.com/whymusticode/plutoSDR_FPGA_channelizer.git
@@ -21,27 +61,12 @@ cd plutoSDR_FPGA_channelizer
 make VIVADO_SETTINGS=/opt/Xilinx/Vivado/2023.2/settings64.sh build/pluto.frm build/pluto.dfu
 ```
 
-On first use the Makefile applies `patches/hdl` (two hooks that let
+The fork keeps ADI's submodules at their stock v0.39 commits. On first use
+the Makefile applies `patches/hdl` (two hooks that let
 `channelizer/hdl/bd.tcl` edit the stock Pluto block design) and
-`patches/buildroot` (mirror and compiler fixes so the 2019-era host packages
-build on a current distribution; Python 3 with numpy and the libiio bindings
-on the board; the second Cortex-A9 brought online at boot). Flash `build/pluto.frm` the usual way: copy
-it to the Pluto's mass-storage drive and eject.
-
-## Use
-
-```python
-from pluto_channelizer import PlutoChannelizer      # channelizer/host/
-
-with PlutoChannelizer(nch=6, spacing=400e3, bandwidth=300e3, lo=100e6) as pfb:
-    pfb.select([0, 2, 5])
-    x = pfb.read(400_000)                    # {channel: (2, n) complex64}, RX1/RX2
-```
-
-See [`channelizer/README.md`](channelizer/README.md) for the channel model,
-limits and register map, and [`channelizer/apps/`](channelizer/apps/README.md)
-for processing the selected channels on the Pluto's ARM (a C binary or a
-Python script, copied over ssh at run time) before they reach USB.
+`patches/buildroot` (fixes so the 2019-era host packages build on a current
+distribution, Python on the board, the second core). Flash `build/pluto.frm`
+the usual way: copy it to the Pluto's mass-storage drive and eject.
 
 ## License
 
