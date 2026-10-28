@@ -51,6 +51,12 @@ apps: [`channelizer/apps/README.md`](channelizer/apps/README.md).
 
 > Status: pre-release. Validated on hardware at n = 2, 4, 8, 64 and 256.
 
+## Flash
+
+A prebuilt image is in [`prebuilt/`](prebuilt/): copy `prebuilt/pluto.frm` to
+the Pluto's mass-storage drive and eject. Stock firmware goes back on the same
+way.
+
 ## Build
 
 Building needs Vivado 2023.2 and the host packages listed in ADI's
