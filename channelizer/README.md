@@ -25,10 +25,11 @@ with PlutoChannelizer(nch=6, spacing=400e3, bandwidth=300e3, taps=8, lo=100e6) a
   taps, `spacing/2` gives about 78 dB of alias rejection and `0.75 * spacing`
   about 49 dB (`pfb.filter_metrics`).
 - **`nch=1`** is raw mode: the bank is bypassed and the DMA gets both
-  receivers exactly as the radio delivers them, at `fs = spacing` (up to
-  30.72 MS/s), centred on `lo`. Same stream format and units, so `read()` and
-  the apps work unchanged; over USB only the first ~2 MS/s arrive gap-free, but
-  an app on the ARM sees the full rate.
+  receivers exactly as the radio delivers them, at `fs = spacing`
+  (2.083–30.72 MS/s), centred on `lo`. Same stream format and units, so
+  `read()` and the apps work unchanged. Measured: 2.5 MS/s reaches the host
+  gap-free; an app on the ARM receives the full 30.72 MS/s (246 MB/s), and can
+  copy every block up to ~26 MS/s.
 - **Samples** are int16 at Q18 (8 × ADC-code scale; the 64-way bank's
   processing gain makes the 3 extra bits real), converted to ADC-code units
   (full scale 2048).
