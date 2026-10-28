@@ -67,7 +67,9 @@ else
 all: clean-build $(TARGETS) zip-all legal-info
 endif
 
-.NOTPARALLEL: all
+# The steps share submodule trees and Vivado is memory hungry: run them one at
+# a time even under make -j (each step still builds with NCORES jobs).
+.NOTPARALLEL:
 
 TARGET_DTS_FILES:=$(foreach dts,$(TARGET_DTS_FILES),build/$(dts))
 
