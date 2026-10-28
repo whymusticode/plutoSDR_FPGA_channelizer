@@ -9,7 +9,7 @@ set from the host at runtime. Everything specific to this fork is in
 their stock v0.39 commits.
 
 > Status: pre-release. Bit-exact against its model in simulation at every
-> size; hardware validation of this image is in progress.
+> size and validated on hardware at n = 2, 4, 8, 64 and 256 (FM, BLE, LTE).
 
 ## Build
 
@@ -24,7 +24,8 @@ make VIVADO_SETTINGS=/opt/Xilinx/Vivado/2023.2/settings64.sh build/pluto.frm bui
 On first use the Makefile applies `patches/hdl` (two hooks that let
 `channelizer/hdl/bd.tcl` edit the stock Pluto block design) and
 `patches/buildroot` (mirror and compiler fixes so the 2019-era host packages
-build on a current distribution). Flash `build/pluto.frm` the usual way: copy
+build on a current distribution; Python 3 with numpy and the libiio bindings
+on the board; the second Cortex-A9 brought online at boot). Flash `build/pluto.frm` the usual way: copy
 it to the Pluto's mass-storage drive and eject.
 
 ## Use
@@ -38,7 +39,9 @@ with PlutoChannelizer(nch=6, spacing=400e3, bandwidth=300e3, lo=100e6) as pfb:
 ```
 
 See [`channelizer/README.md`](channelizer/README.md) for the channel model,
-limits and register map.
+limits and register map, and [`channelizer/apps/`](channelizer/apps/README.md)
+for processing the selected channels on the Pluto's ARM (a C binary or a
+Python script, copied over ssh at run time) before they reach USB.
 
 ## License
 

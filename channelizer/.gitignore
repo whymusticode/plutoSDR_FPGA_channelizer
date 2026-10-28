@@ -1,1 +1,5 @@
 __pycache__/
+apps/build/
+demo/captures/
+demo/out/
+demo/music/

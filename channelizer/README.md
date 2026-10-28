@@ -48,10 +48,30 @@ with PlutoChannelizer(nch=6, spacing=400e3, bandwidth=300e3, taps=8, lo=100e6) a
   channel selector, and `pfb_ctrl.v`, the register block at `0x41210000`
   (map in its header).
 - `filter/pfb_filter.py` — prototype design, quantization and headroom
-  checks; `host/` — `PlutoChannelizer` and a hardware test.
+  checks; `host/` — `PlutoChannelizer`, the app client (`pfb_apps.py`) and a
+  hardware test.
+- `apps/` — on-Pluto channel apps (C with NEON, or Python) and their
+  message protocol; `demo/` — capture, decode and video-render scripts.
 - `test/pfb_model.py` — bit-exact model of the RTL; `test/sim/check_rtl.py`
   runs every size under iverilog against it (plus throughput),
   `test/sim/check_system.py` the registers, clock crossings and selector.
+
+## Apps on the ARM
+
+USB carries ~2 MS/s of selected channels; the FPGA-to-ARM DMA carries ~30.
+An app runs on the Pluto against the selection and sends only its results:
+
+```python
+with pfb.run_app("apps/build/fmaudio") as app:   # or "apps/py/fm_audio.py"
+    for m in app.messages():                     # (type, channel, rx, sample, data)
+        ...
+```
+
+Included: bit-depth reduction (`requant`), FM audio for every channel
+(`fmaudio`), BLE advertising decode (`bleadv`); see [`apps/`](apps/README.md).
+The firmware ships Python 3, numpy and the libiio bindings, and runs Linux on
+both cores. `demo/` holds the scripts behind the demo video (FM, BLE, LTE
+captures; the captures themselves are not in the repository).
 
 ## Control path
 

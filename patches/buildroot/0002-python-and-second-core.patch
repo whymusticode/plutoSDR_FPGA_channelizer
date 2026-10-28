@@ -1,0 +1,112 @@
+diff --git a/board/pluto/S03cpu1 b/board/pluto/S03cpu1
+new file mode 100755
+index 00000000..ef0d4c60
+--- /dev/null
++++ b/board/pluto/S03cpu1
+@@ -0,0 +1,17 @@
++#!/bin/sh
++# U-Boot boots Linux with maxcpus=1 (its stored environment, which a firmware
++# update does not rewrite). CPU hotplug can still bring the second Cortex-A9
++# online, so do it here: the channel apps and the network stack each get a core.
++
++case "$1" in
++	start)
++		f=/sys/devices/system/cpu/cpu1/online
++		[ -w "$f" ] && echo 1 > "$f" && echo "CPU1 online"
++		;;
++	stop|restart|reload)
++		;;
++	*)
++		echo "Usage: $0 {start}"
++		exit 1
++esac
++exit 0
+diff --git a/board/pluto/post-build.sh b/board/pluto/post-build.sh
+index 03021a49..8e93bef5 100755
+--- a/board/pluto/post-build.sh
++++ b/board/pluto/post-build.sh
+@@ -6,6 +6,16 @@ set -e
+ 
+ INSTALL=install
+ 
++# Python for on-board channel apps: drop what they never import, so the image
++# stays inside the 30 MB qspi-linux partition.
++PY=$(ls -d ${TARGET_DIR}/usr/lib/python3.* 2>/dev/null | head -1)
++if [ -n "$PY" ]; then
++	rm -rf $PY/ensurepip $PY/distutils $PY/idlelib $PY/lib2to3 $PY/pydoc_data \
++	       $PY/site-packages/numpy/f2py $PY/site-packages/numpy/distutils \
++	       $PY/site-packages/numpy/typing $PY/site-packages/numpy/doc
++	find $PY/site-packages/numpy -type d -name tests -prune -exec rm -rf {} +
++fi
++
+ # Add a console on tty1
+ grep -qE '^ttyGS0::' ${TARGET_DIR}/etc/inittab || \
+ sed -i '/GENERIC_SERIAL/a\
+@@ -57,6 +67,7 @@ ${INSTALL} -D -m 0755 ${BOARD_DIR}/update.sh ${TARGET_DIR}/sbin/
+ ${INSTALL} -D -m 0755 ${BOARD_DIR}/update_from_github.sh ${TARGET_DIR}/sbin/
+ ${INSTALL} -D -m 0755 ${BOARD_DIR}/update_frm.sh ${TARGET_DIR}/sbin/
+ ${INSTALL} -D -m 0755 ${BOARD_DIR}/udc_handle_suspend.sh ${TARGET_DIR}/sbin/
++${INSTALL} -D -m 0755 ${BOARD_DIR}/S03cpu1 ${TARGET_DIR}/etc/init.d/
+ ${INSTALL} -D -m 0755 ${BOARD_DIR}/S10mdev ${TARGET_DIR}/etc/init.d/
+ ${INSTALL} -D -m 0755 ${BOARD_DIR}/S15watchdog ${TARGET_DIR}/etc/init.d/
+ ${INSTALL} -D -m 0755 ${BOARD_DIR}/S20urandom ${TARGET_DIR}/etc/init.d/
+diff --git a/configs/zynq_pluto_defconfig b/configs/zynq_pluto_defconfig
+index ab565141..c7f388d3 100644
+--- a/configs/zynq_pluto_defconfig
++++ b/configs/zynq_pluto_defconfig
+@@ -64,3 +64,7 @@ BR2_PACKAGE_HOST_GENIMAGE=y
+ BR2_PACKAGE_HOST_MTOOLS=y
+ BR2_PRIMARY_SITE="https://sources.buildroot.net"
+ BR2_BACKUP_SITE="https://sources.buildroot.net"
++# Channel apps in Python (pfbapp.py): interpreter, numpy, libiio bindings
++BR2_PACKAGE_PYTHON3=y
++BR2_PACKAGE_PYTHON_NUMPY=y
++BR2_PACKAGE_LIBIIO_BINDINGS_PYTHON=y
+diff --git a/package/libffi/0004-tramp-declare-open_temp_exec_file.patch b/package/libffi/0004-tramp-declare-open_temp_exec_file.patch
+new file mode 100644
+index 00000000..4b7a37ef
+--- /dev/null
++++ b/package/libffi/0004-tramp-declare-open_temp_exec_file.patch
+@@ -0,0 +1,17 @@
++From: Pluto channelizer build <noreply@localhost>
++Subject: [PATCH] tramp: declare open_temp_exec_file
++
++tramp.c calls open_temp_exec_file(), defined in closures.c, without a
++prototype. GCC 14 and later reject implicit function declarations, so the
++host libffi needed by host Python fails to build on a current distribution.
++
++--- a/src/tramp.c
+++++ b/src/tramp.c
++@@ -46,6 +46,7 @@
++ #include <fcntl.h>
++ #include <pthread.h>
++ #include <sys/mman.h>
+++int open_temp_exec_file (void);
++ #include <tramp.h>
++ #ifdef __linux__
++ #include <linux/limits.h>
+diff --git a/package/libiio/0001-python-fall-back-to-the-soname.patch b/package/libiio/0001-python-fall-back-to-the-soname.patch
+new file mode 100644
+index 00000000..e26e1bce
+--- /dev/null
++++ b/package/libiio/0001-python-fall-back-to-the-soname.patch
+@@ -0,0 +1,19 @@
++From: Pluto channelizer build <noreply@localhost>
++Subject: [PATCH] python: fall back to the soname when find_library fails
++
++ctypes.util.find_library() needs ldconfig, gcc or objdump to search with;
++on a minimal target such as the ADALM-Pluto it returns None, CDLL(None)
++then opens the running interpreter, and the first iio_* symbol lookup
++fails. Fall back to loading the library by its soname.
++
++--- a/bindings/python/iio.py
+++++ b/bindings/python/iio.py
++@@ -224,7 +224,7 @@
++     # Non-windows, possibly Posix system
++     _iiolib = "iio"
++ 
++-_lib = _cdll(find_library(_iiolib), use_errno=True, use_last_error=True)
+++_lib = _cdll(find_library(_iiolib) or "libiio.so.0", use_errno=True, use_last_error=True)
++ 
++ _get_backends_count = _lib.iio_get_backends_count
++ _get_backends_count.restype = c_uint

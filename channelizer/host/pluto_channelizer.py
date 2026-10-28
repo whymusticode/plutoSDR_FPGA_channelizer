@@ -283,22 +283,45 @@ class PlutoChannelizer:
             return None
         return int(out.strip(), 16) if value is None else value
 
-    def _shell(self, script):
-        """Run a shell script on the Pluto as root over one ssh connection."""
+    def _ssh_argv(self, command):
+        """ssh argv and env (password via SSH_ASKPASS); the caller deletes env['SSH_ASKPASS']."""
         with tempfile.NamedTemporaryFile("w", delete=False, suffix=".sh") as f:
             f.write(f"#!/bin/sh\necho '{self.password}'\n")
         os.chmod(f.name, stat.S_IRWXU)
         env = dict(os.environ, SSH_ASKPASS=f.name, SSH_ASKPASS_REQUIRE="force", DISPLAY=":0")
+        return ["ssh", "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
+                "-o", "LogLevel=ERROR", "-o", "ConnectTimeout=5", f"root@{self.host}", command], env
+
+    def _shell(self, script, data=None):
+        """Run a shell script on the Pluto as root over one ssh connection, or, with
+        `data` (bytes), run `script` as a command with `data` on its stdin."""
+        argv, env = self._ssh_argv("sh -e" if data is None else script)
         try:
-            r = subprocess.run(["ssh", "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
-                                "-o", "LogLevel=ERROR", "-o", "ConnectTimeout=5", f"root@{self.host}",
-                                "sh -e"], input=script + "\n", env=env, capture_output=True,
-                               text=True, timeout=120)
+            r = subprocess.run(argv, input=(script + "\n").encode() if data is None else data,
+                               env=env, capture_output=True, timeout=120)
         finally:
-            os.unlink(f.name)
+            os.unlink(env["SSH_ASKPASS"])
         if r.returncode != 0:
-            raise RuntimeError(f"ssh/devmem failed: {r.stderr.strip()}")
-        return r.stdout
+            raise RuntimeError(f"ssh/devmem failed: {r.stderr.decode(errors='replace').strip()}")
+        return r.stdout.decode(errors="replace")
+
+    # ---- on-Pluto apps -----------------------------------------------------------
+    def run_app(self, path, *args, port=30500, frames=None, local=False):
+        """Run a channel app on the Pluto's ARM against the current selection.
+
+        `path` is a binary built from apps/ (or, on firmware with Python, a
+        .py script using apps/pfbapp.py). It is copied to /tmp, started with
+        the selection's slot count and rate, and connected to; returns an
+        AppStream (see pfb_apps.py). The host's own IIO buffer is released
+        first; select() again afterwards to stream raw IQ to the host.
+        local=True runs a .py app on this machine against the Pluto instead,
+        for developing it before it goes on the board.
+        """
+        from pfb_apps import start_app
+        if not self.order:
+            raise RuntimeError("select() channels first")
+        self._close_buffer()
+        return start_app(self, Path(path), list(map(str, args)), port, frames, local)
 
     def _close_buffer(self):
         self._buf = None
