@@ -3,7 +3,8 @@
 // taps in coef.hex (one phase per line), write and commit mask0.hex (one
 // 32-bit word per line), release, stream in.hex every GAP+1 fabric cycles,
 // and once SWITCH_AT samples have gone in commit mask1.hex. Selected beats
-// go to sel.hex; register readbacks go to regs.txt.
+// go to sel.hex; register readbacks go to regs.txt. Finally CONTROL[1] switches
+// pfb_rx_mux to a fixed raw sample, which goes to regs.txt too.
 `timescale 1ns/1ps
 module tb_system;
   parameter integer NSAMP = 0;
@@ -29,6 +30,7 @@ module tb_system;
   wire [2:0] coef_wtap;
   wire [17:0] coef_wdata;
   wire [N_MAX-1:0] mask;
+  wire bypass;
 
   pfb_ctrl ctrl (
     .s_axi_aclk(aclk), .s_axi_aresetn(aresetn),
@@ -39,7 +41,7 @@ module tb_system;
     .s_axi_rdata(rdata), .s_axi_rresp(rresp), .s_axi_rvalid(rvalid), .s_axi_rready(rready),
     .pfb_clk(pclk), .pfb_resetn(presetn), .pfb_reset(preset), .pfb_logn(plogn),
     .coef_we(coef_we), .coef_wphase(coef_wphase), .coef_wtap(coef_wtap), .coef_wdata(coef_wdata),
-    .channel_mask(mask), .in_clk(pclk), .in_drop(1'b0), .out_drop(1'b0));
+    .channel_mask(mask), .in_clk(pclk), .in_drop(1'b0), .out_drop(1'b0), .rx_bypass(bypass));
 
   reg  vin = 0;
   reg  [63:0] din;
@@ -56,6 +58,27 @@ module tb_system;
   pfb_dual_bin_selector sel (
     .clk(pclk), .rst(preset), .logn(plogn), .channel_mask(mask),
     .s_valid(cvalid), .s_last(clast), .s_data(cdata), .m_valid(svalid), .m_data(sdata));
+
+  reg  rawv = 0;
+  wire mvalid;
+  wire [63:0] mdata;
+  pfb_rx_mux mux (
+    .clk(pclk), .bypass(bypass),
+    .rx0_valid(rawv), .rx0_i(16'hf801), .rx0_q(16'h07ff),
+    .rx1_valid(rawv), .rx1_i(16'h0001), .rx1_q(16'hffff),
+    .pfb_valid(svalid), .pfb_data(sdata), .m_valid(mvalid), .m_data(mdata));
+  integer nmux = 0, nraw = 0;
+  reg [63:0] raw_seen = 0, pfb_mismatch = 0;
+  reg [63:0] sdata_q;
+  reg svalid_q = 0;
+  always @(posedge pclk) begin
+    svalid_q <= svalid; sdata_q <= sdata;
+    if (mvalid && !bypass) begin
+      nmux = nmux + 1;
+      if (!svalid_q || mdata != sdata_q) pfb_mismatch = pfb_mismatch + 1;
+    end
+    if (mvalid && bypass) begin nraw = nraw + 1; raw_seen = mdata; end
+  end
 
   task axi_write(input [11:0] a, input [31:0] d);
     begin
@@ -136,6 +159,15 @@ module tb_system;
     wait (i >= NSAMP);
     repeat (4000) @(posedge pclk);
     axi_read(12'h00c, r); $fwrite(fr, "status %h\n", r);
+    $fwrite(fr, "mux_beats %0d\n", nmux - nout);
+    $fwrite(fr, "mux_mismatch %0d\n", pfb_mismatch);
+    axi_write(12'h008, (LOGN << 8) | 2);
+    axi_read(12'h008, r); $fwrite(fr, "control_bypass %h\n", r);
+    repeat (20) @(posedge pclk);
+    rawv <= 1; repeat (5) @(posedge pclk); rawv <= 0;
+    repeat (4) @(posedge pclk);
+    $fwrite(fr, "raw_beats %0d\n", nraw);
+    $fwrite(fr, "raw %h\n", raw_seen);
     $fclose(fd); $fclose(fr);
     $finish;
   end

@@ -6,7 +6,8 @@ once, without the USB bottleneck.**
 The stock Pluto streams raw IQ over USB 2.0, which tops out at a few MS/s, far
 below the 20+ MHz the radio can see. This firmware puts a polyphase filter
 bank in the Pluto's FPGA: it splits the band (on both coherent receivers)
-into 2..256 equal channels and sends only the ones you pick. Need two
+into 2..256 equal channels and sends only the ones you pick (or, with
+`nch=1`, passes the raw IQ straight through). Need two
 Bluetooth channels 14 MHz apart, twelve FM stations or two LTE carriers?
 Select them and only those reach the host. Channel count, spacing, bandwidth,
 filter length and selection are all set from Python at runtime: one firmware

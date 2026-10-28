@@ -1,8 +1,11 @@
 // Channelizer control registers (AXI4-Lite, CPU clock), replacing the mask GPIO.
 //
 //   0x00 ID       RO  0x50464232 ("PFB2")
-//   0x04 BUILD    RO  [7:0] log2 N_MAX, [15:8] taps per phase, [23:16] coef bits
-//   0x08 CONTROL  RW  [0] hold the channelizer in reset, [11:8] log2 channels
+//   0x04 BUILD    RO  [7:0] log2 N_MAX, [15:8] taps per phase, [23:16] coef bits,
+//                     [24] CONTROL[1] (bypass) exists
+//   0x08 CONTROL  RW  [0] hold the channelizer in reset, [1] bypass: the DMA
+//                     gets the raw receivers instead of the selected channels,
+//                     [11:8] log2 channels
 //   0x0C STATUS   RW1C [0] input dropped samples, [1] output dropped samples;
 //                 RO [8] held in reset
 //   0x10 COEF_IDX RW  phase * TAPS + tap of the next COEF_DATA write
@@ -66,17 +69,19 @@ module pfb_ctrl #(
   output reg  [N_MAX-1:0] channel_mask,
   input  wire        in_clk,
   input  wire        in_drop,      // in_clk: the ingress discarded a sample
-  input  wire        out_drop      // pfb_clk: the output FIFO discarded a beat
+  input  wire        out_drop,     // pfb_clk: the output FIFO discarded a beat
+  output wire        rx_bypass     // in_clk: CONTROL[1]
 );
   localparam [31:0] ID = 32'h50464232;
   localparam integer MASK_WORDS = N_MAX / 32;
   localparam integer IDX_W = LOGN_MAX + TAP_W;
   localparam [7:0] BUILD_LOGN = LOGN_MAX, BUILD_TAPS = TAPS, BUILD_COEF_W = 18;
+  localparam [7:0] BUILD_FEATURES = 8'h01;   // [0] bypass
 
   assign s_axi_bresp = 2'b00;
   assign s_axi_rresp = 2'b00;
 
-  reg                 hold;
+  reg                 hold, bypass;
   reg  [3:0]          logn;
   reg  [IDX_W-1:0]    coef_idx;
   reg  [17:0]         coef_val;
@@ -98,7 +103,7 @@ module pfb_ctrl #(
     if (!s_axi_aresetn) begin
       wstate <= W_IDLE;
       s_axi_awready <= 1'b0; s_axi_wready <= 1'b0; s_axi_bvalid <= 1'b0;
-      hold <= 1'b0; logn <= BOOT_LOGN;
+      hold <= 1'b0; bypass <= 1'b0; logn <= BOOT_LOGN;
       coef_idx <= 0; coef_send <= 1'b0; mask_send <= 1'b0; sending_coef <= 1'b0;
       mask_shadow <= 0; dropped <= 2'b00;
     end else begin
@@ -115,7 +120,7 @@ module pfb_ctrl #(
         W_DO: begin
           wstate <= W_RESP;
           case (waddr[11:2])
-            10'h02: begin hold <= wdata[0]; logn <= wdata[11:8]; end
+            10'h02: begin hold <= wdata[0]; bypass <= wdata[1]; logn <= wdata[11:8]; end
             10'h03: dropped <= (dropped | drop_seen) & ~wdata[1:0];
             10'h04: coef_idx <= wdata[IDX_W-1:0];
             10'h05: begin
@@ -159,8 +164,8 @@ module pfb_ctrl #(
         s_axi_rvalid <= 1'b1;
         case (s_axi_araddr[11:2])
           10'h00: s_axi_rdata <= ID;
-          10'h01: s_axi_rdata <= {8'd0, BUILD_COEF_W, BUILD_TAPS, BUILD_LOGN};
-          10'h02: s_axi_rdata <= {20'd0, logn, 7'd0, hold};
+          10'h01: s_axi_rdata <= {BUILD_FEATURES, BUILD_COEF_W, BUILD_TAPS, BUILD_LOGN};
+          10'h02: s_axi_rdata <= {20'd0, logn, 6'd0, bypass, hold};
           10'h03: s_axi_rdata <= {23'd0, hold, 6'd0, dropped};
           10'h04: s_axi_rdata <= coef_idx;
           default: begin
@@ -186,6 +191,9 @@ module pfb_ctrl #(
 
   xpm_cdc_array_single #(.DEST_SYNC_FF(4), .SRC_INPUT_REG(1), .WIDTH(4)) logn_cdc (
     .src_clk(s_axi_aclk), .src_in(logn), .dest_clk(pfb_clk), .dest_out(pfb_logn));
+
+  xpm_cdc_array_single #(.DEST_SYNC_FF(4), .SRC_INPUT_REG(1), .WIDTH(1)) bypass_cdc (
+    .src_clk(s_axi_aclk), .src_in(bypass), .dest_clk(in_clk), .dest_out(rx_bypass));
 
   wire [IDX_W+17:0] coef_bus;
   xpm_cdc_handshake #(.DEST_EXT_HSK(0), .DEST_SYNC_FF(4), .SRC_SYNC_FF(4),

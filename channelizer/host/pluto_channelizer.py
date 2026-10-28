@@ -15,6 +15,10 @@ The FFT runs at n = nch rounded up to a power of two (2..256), and the radio at
 fs = n * spacing; the n - nch extra channels sit at the band edges, unused.
 The host designs the prototype (filter/pfb_filter.py) and loads it.
 
+nch=1 is raw mode: the bank is bypassed and both receivers stream as the radio
+delivers them, at fs = spacing (up to 30.72 MS/s), centred on lo; bandwidth
+and taps do not apply. Firmware from before the bypass bit refuses it.
+
 Firmware facts this relies on (see ../README.md and hdl/pfb_ctrl.v):
 * Control registers at 0x41210000 (hdl/pfb_ctrl.v) with no kernel driver, so
   they are written with devmem over ssh; a reconfiguration is one ssh call.
@@ -47,13 +51,15 @@ LINK_BYTES_PER_S = 16e6  # measured network-backend ceiling, roughly
 # simulation (test/sim/check_rtl.py); past it the ingress FIFO drops samples.
 FS_MAX = {2: 18.2e6, 4: 22.2e6, 8: 27.2e6, 16: 33.1e6, 32: 38.2e6,
           64: 38.5e6, 128: 36.9e6, 256: 35.9e6}
+FS_RAW_MAX = 30.72e6     # the AD9361 with both receivers on
 FS_MIN_NO_FIR = 2.0833e6  # below this the AD9363 needs its FIR decimation (not set up here)
 
 
 def fft_size(nch):
+    """FFT size for nch channels; 1 (no FFT) for raw mode."""
     if not 1 <= nch <= N_MAX:
         raise ValueError(f"nch must be 1..{N_MAX}")
-    return max(2, 1 << (int(nch) - 1).bit_length())
+    return 1 << (int(nch) - 1).bit_length()
 
 
 class PlutoChannelizer:
@@ -62,19 +68,27 @@ class PlutoChannelizer:
                  host=None, password="analog", timeout_ms=5000):
         self.nch, self.spacing = int(nch), float(spacing)
         self.n = fft_size(self.nch)
-        self.logn = self.n.bit_length() - 1
+        self.raw = self.n == 1
+        self.logn = max(1, self.n.bit_length() - 1)
         self.fs = self.n * self.spacing
         self.bandwidth = float(bandwidth if bandwidth is not None else spacing / 2)
         self.taps = int(taps)
         if not 1 <= self.taps <= TAPS_MAX:
             raise ValueError(f"taps must be 1..{TAPS_MAX}")
-        if self.fs > FS_MAX[self.n]:
-            raise ValueError(f"{self.n}-point bank at fs = {self.n} x {spacing/1e3:g} kHz = "
-                             f"{self.fs/1e6:.2f} MS/s exceeds the FPGA's {FS_MAX[self.n]/1e6:.1f} MS/s")
-        # Design and check the prototype before touching the radio.
-        self.prototype = pfb_filter.design(self.n, self.spacing, self.bandwidth, self.taps)
-        self._q = pfb_filter.phase_taps(self.prototype, self.n)
-        self.filter_metrics = pfb_filter.metrics(self.prototype, self.bandwidth / 2, self.fs, self.n)
+        if self.raw:
+            if self.fs > FS_RAW_MAX:
+                raise ValueError(f"raw mode at {self.fs/1e6:.2f} MS/s exceeds the radio's "
+                                 f"{FS_RAW_MAX/1e6:.2f} MS/s with both receivers")
+            self.bandwidth = self.spacing
+            self.prototype = self._q = self.filter_metrics = None
+        else:
+            if self.fs > FS_MAX[self.n]:
+                raise ValueError(f"{self.n}-point bank at fs = {self.n} x {spacing/1e3:g} kHz = "
+                                 f"{self.fs/1e6:.2f} MS/s exceeds the FPGA's {FS_MAX[self.n]/1e6:.1f} MS/s")
+            # Design and check the prototype before touching the radio.
+            self.prototype = pfb_filter.design(self.n, self.spacing, self.bandwidth, self.taps)
+            self._q = pfb_filter.phase_taps(self.prototype, self.n)
+            self.filter_metrics = pfb_filter.metrics(self.prototype, self.bandwidth / 2, self.fs, self.n)
 
         self.uri = uri
         self.host = host or uri.split(":", 1)[1]
@@ -101,6 +115,8 @@ class PlutoChannelizer:
         build = self._reg(REG_BUILD)
         if (build & 0xFF, (build >> 8) & 0xFF) != (N_MAX.bit_length() - 1, TAPS_MAX):
             raise RuntimeError(f"firmware build register {build:#x} does not match this host code")
+        if self.raw and not build >> 24 & 1:
+            raise RuntimeError("nch=1 (raw mode) needs firmware with the bypass bit; flash a newer image")
 
         self._lo = self.phy.find_channel("altvoltage0", True)
         self._rxc = [self.phy.find_channel(f"voltage{i}", False) for i in range(2)]
@@ -192,6 +208,8 @@ class PlutoChannelizer:
             warnings.warn(f"{len(channels)} channels need {rate/1e6:.1f} MB/s; "
                           f"the link sustains about {LINK_BYTES_PER_S/1e6:.0f} MB/s, expect gaps")
         self._close_buffer()
+        if self.raw:
+            return self._open(channels, [0])
         bits = sum(1 << self._bin(k) for k in channels)
         words = [(bits >> (32 * w)) & 0xFFFFFFFF for w in range(N_MAX // 32)]
         a = lambda r: f"{REG_BASE + r:#x}"
@@ -200,7 +218,10 @@ class PlutoChannelizer:
                                      + [f"devmem {a(REG_MASK + 4 * w)} 32" for w in range(len(words))]))
         if [int(v, 16) for v in back.split()] != words:
             raise RuntimeError("mask readback mismatch")
-        self.channels, self.order, self.rotation = channels, self.dma_order(channels), 0
+        return self._open(channels, self.dma_order(channels))
+
+    def _open(self, channels, order):
+        self.channels, self.order, self.rotation = channels, order, 0
         # Whole frames per block, so blocks never split a frame and the discard
         # below keeps the slot alignment.
         k = len(self.order)
@@ -260,8 +281,15 @@ class PlutoChannelizer:
 
     # ---- plumbing ----------------------------------------------------------------
     def _configure(self):
-        """Size and taps in one ssh call: hold, load, release (pfb_ctrl.v)."""
+        """Size and taps in one ssh call: hold, load, release (pfb_ctrl.v). Raw
+        mode instead holds the bank in reset and sets the bypass."""
         a = lambda r: f"{REG_BASE + r:#x}"
+        if self.raw:
+            control = 3 | self.logn << 8
+            back = self._shell(f"devmem {a(REG_CONTROL)} 32 {control}\ndevmem {a(REG_CONTROL)} 32")
+            if int(back, 16) != control:
+                raise RuntimeError(f"bypass readback {back.strip()} mismatch")
+            return
         lines = [f"devmem {a(REG_CONTROL)} 32 {1 | self.logn << 8}",
                  f"devmem {a(REG_COEF_IDX)} 32 0"]
         mask = (1 << pfb_filter.COEF_W) - 1

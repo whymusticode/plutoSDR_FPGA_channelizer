@@ -5,7 +5,8 @@ Each case configures a size and taps over AXI-Lite, streams at the real-rate
 input gap, and commits a second mask mid-stream. The selected beats must be
 the bit-exact model's frames filtered by the first mask up to some frame
 boundary and by the second after it, with the channel of each beat in
-fftshift numbering.
+fftshift numbering. pfb_rx_mux must pass those beats through unchanged, and
+with CONTROL[1] set send raw samples, shifted to Q18, instead.
 """
 import subprocess, sys, tempfile
 from pathlib import Path
@@ -21,7 +22,7 @@ import pfb_filter as F
 from check_rtl import stimulus, words, coef_hex, taps_for  # noqa: E402
 
 SOURCES = [HERE / "tb_system.sv", HERE / "xpm_stubs.v", ROOT / "hdl" / "pfb_ctrl.v",
-           ROOT / "hdl" / "pfb_channelizer_wrapper.v", ROOT / "hdl" / "pfb_dual_bin_selector.v",
+           ROOT / "hdl" / "pfb_channelizer_wrapper.v", ROOT / "hdl" / "pfb_dual_bin_selector.v", ROOT / "hdl" / "pfb_rx_mux.v",
            m.RTL / "pfb_channelizer.sv"]
 
 
@@ -73,12 +74,17 @@ with tempfile.TemporaryDirectory() as d:
         got, regs, q = run(logn, mask0, mask1, x, 2048, Path(d))
         cands = expected(x, q, logn, mask0, mask1)
         hit = [k for k, e in enumerate(cands) if len(e) == len(got) and (e == got).all()]
-        regs_ok = (regs["id"] == "50464232" and regs["build"] == "00120808"
+        regs_ok = (regs["id"] == "50464232" and regs["build"] == "01120808"
                    and regs["control_boot"] == "00000600"
                    and regs["coef_idx"] == f"{n * 8 % 2048:08x}"   # 11 bits, wraps at 256
                    and regs["status_held"] == "00000100"
                    and regs["control"] == f"{logn << 8:08x}"
-                   and int(regs["status"], 16) & 0x103 == 0)
+                   and int(regs["status"], 16) & 0x103 == 0
+                   and regs["mux_beats"] == "0" and regs["mux_mismatch"] == "0"
+                   and regs["control_bypass"] == f"{logn << 8 | 2:08x}"
+                   and regs["raw_beats"] == "5"
+                   # {rx1 q, rx1 i, rx0 q, rx0 i} = {-1, 1, 2047, -2047} << 3
+                   and regs["raw"] == "fff800083ff8c008")
         good = bool(hit) and regs_ok and len(mask0) and hit[0] not in (0, len(cands) - 1)
         ok &= good
         where = f"switch after frame {hit[0]} of {len(cands) - 1}" if hit else "no frame boundary matches"

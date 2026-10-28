@@ -24,6 +24,11 @@ with PlutoChannelizer(nch=6, spacing=400e3, bandwidth=300e3, taps=8, lo=100e6) a
   when critically sampled. `bandwidth` close to `spacing` costs stopband: at 8
   taps, `spacing/2` gives about 78 dB of alias rejection and `0.75 * spacing`
   about 49 dB (`pfb.filter_metrics`).
+- **`nch=1`** is raw mode: the bank is bypassed and the DMA gets both
+  receivers exactly as the radio delivers them, at `fs = spacing` (up to
+  30.72 MS/s), centred on `lo`. Same stream format and units, so `read()` and
+  the apps work unchanged; over USB only the first ~2 MS/s arrive gap-free, but
+  an app on the ARM sees the full rate.
 - **Samples** are int16 at Q18 (8 × ADC-code scale; the 64-way bank's
   processing gain makes the 3 extra bits real), converted to ADC-code units
   (full scale 2048).
@@ -32,7 +37,7 @@ with PlutoChannelizer(nch=6, spacing=400e3, bandwidth=300e3, taps=8, lo=100e6) a
 
 | | |
 |---|---|
-| FFT size | 2..256, any power of two |
+| FFT size | 2..256, any power of two; `nch=1` bypasses the bank (raw IQ) |
 | taps per phase | 1..8 (a shorter prototype is zero padded) |
 | fs (FPGA) | 18.2 / 22.2 / 27.2 / 33.1 / 38.2 / 38.5 / 36.9 / 35.9 MS/s for n = 2..256 (`FS_MAX`, from simulation) |
 | fs (radio) | ≥ 2.083 MS/s: below that the AD9363 needs its FIR decimation, which the host class does not set up yet |
@@ -45,7 +50,8 @@ with PlutoChannelizer(nch=6, spacing=400e3, bandwidth=300e3, taps=8, lo=100e6) a
   channels and run at `2**cfg_logn`. Taps live in a writable RAM that boots
   with the 64-channel `pfb_coeffs.mem`; `twiddle.mem` is the 256-point table.
 - `hdl/` — the Pluto block-design edit (`bd.tcl`), the dual-RX ingress, the
-  channel selector, and `pfb_ctrl.v`, the register block at `0x41210000`
+  channel selector, `pfb_rx_mux.v` (selected channels or raw IQ into the
+  DMA), and `pfb_ctrl.v`, the register block at `0x41210000`
   (map in its header).
 - `filter/pfb_filter.py` — prototype design, quantization and headroom
   checks; `host/` — `PlutoChannelizer`, the app client (`pfb_apps.py`) and a
